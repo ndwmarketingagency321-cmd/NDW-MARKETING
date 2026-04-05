@@ -1,31 +1,25 @@
-import { drizzle } from 'drizzle-orm/mysql2';
-import mysql from 'mysql2/promise';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import pg from 'pg';
 import * as schema from '../drizzle/schema';
+import { eq } from 'drizzle-orm';
 
-let db: ReturnType<typeof drizzle> | null = null;
-
-export async function getDb() {
-  if (db) return db;
-
-  const connection = await mysql.createConnection({
-    host: process.env.DATABASE_HOST || 'localhost',
-    user: process.env.DATABASE_USER || 'root',
-    password: process.env.DATABASE_PASSWORD || '',
-    database: process.env.DATABASE_NAME || 'ndw_marketing',
-  });
-
-  db = drizzle(connection, { schema });
-  return db;
+if (!process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL is not set');
 }
 
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+});
+
+export const db = drizzle(pool, { schema });
+
 export async function queryUsers() {
-  const database = await getDb();
-  return database.query.users.findMany();
+  return db.query.users.findMany();
 }
 
 export async function queryUserByEmail(email: string) {
-  const database = await getDb();
-  return database.query.users.findFirst({
+  return db.query.users.findFirst({
     where: (users, { eq }) => eq(users.email, email),
   });
 }
@@ -35,14 +29,11 @@ export async function createUser(data: {
   name?: string;
   stripeCustomerId?: string;
 }) {
-  const database = await getDb();
-  const result = await database.insert(schema.users).values(data);
-  return result;
+  return db.insert(schema.users).values(data).returning();
 }
 
 export async function querySubscriptionsByUserId(userId: number) {
-  const database = await getDb();
-  return database.query.subscriptions.findMany({
+  return db.query.subscriptions.findMany({
     where: (subscriptions, { eq }) => eq(subscriptions.userId, userId),
   });
 }
@@ -50,25 +41,20 @@ export async function querySubscriptionsByUserId(userId: number) {
 export async function createSubscription(data: {
   userId: number;
   stripeSubscriptionId: string;
-  pricingTier: 'business_start' | 'business_advanced' | 'business_scale';
-  status: 'active' | 'canceled' | 'past_due';
+  pricingTier: string;
+  status: string;
   currentPeriodStart?: Date;
   currentPeriodEnd?: Date;
 }) {
-  const database = await getDb();
-  return database.insert(schema.subscriptions).values(data);
+  return db.insert(schema.subscriptions).values(data).returning();
 }
 
 export async function updateSubscriptionStatus(
   stripeSubscriptionId: string,
-  status: 'active' | 'canceled' | 'past_due'
+  status: string
 ) {
-  const database = await getDb();
-  return database
+  return db
     .update(schema.subscriptions)
     .set({ status })
-    .where(
-      (subscriptions) =>
-        subscriptions.stripeSubscriptionId === stripeSubscriptionId
-    );
+    .where(eq(schema.subscriptions.stripeSubscriptionId, stripeSubscriptionId));
 }
